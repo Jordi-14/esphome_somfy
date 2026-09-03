@@ -29,6 +29,10 @@ The hub handles all radio TX/RX and protocol framing. Device classes (covers tod
 - **For RTS:** CC1101 433 MHz module + antenna (via ESPHome `remote_transmitter` / `remote_receiver`)
 - **For iohc:** CC1101 868 MHz module + antenna (via ESPHome native `cc1101` component in packet mode)
 
+The IOHC implementation has been tested successfully in a real installation
+with both the **Ebyte E07-900M10S** and **Ebyte E07-M1101D**. For new builds,
+use a module and antenna appropriate to the IOHC band used in your region.
+
 ## Installation
 
 ```yaml
