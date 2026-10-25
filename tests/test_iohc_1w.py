@@ -1,7 +1,7 @@
 """Tests for iohc 1W (one-way) specific behaviour."""
 
-import pytest
 import esphome.config_validation as cv
+import pytest
 
 from somfy.cover import (
     CONF_ENCRYPTION_KEY,
@@ -10,8 +10,8 @@ from somfy.cover import (
     CONF_MY_POSITION,
     CONF_TARGET_NODE,
     IOHC_MODE_1W,
-    validate_iohc_config,
     validate_encryption_key,
+    validate_iohc_config,
 )
 
 
