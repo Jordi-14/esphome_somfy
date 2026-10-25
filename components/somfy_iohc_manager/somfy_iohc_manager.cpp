@@ -1148,8 +1148,12 @@ bool SomfyIohcManager::validate_my_relay_frame_(
     return validate_relay_frame_(frame, main_param, sequence) &&
            main_param == iohc_cmd::MP_STOP;
   }
+  // CMD_EXECUTE is 0x00 in io-homecontrol. Do not use a generic non-zero
+  // command check here: step 1 is deliberately an extended EXECUTE frame,
+  // while steps 2 and 3 are BUTTON_EVENT frames. The step-specific checks
+  // below are the authoritative command allow-list.
   if (frame.size() != 27 || frame[1] != 0x00 || frame[2] != 0x00 ||
-      frame[3] != 0x00 || frame[4] != 0x3F || frame[8] == 0)
+      frame[3] != 0x00 || frame[4] != 0x3F)
     return false;
   const uint8_t *data = frame.data() + 9;
   bool valid = false;
@@ -3290,8 +3294,11 @@ bool SomfyIohcManager::decrypt_relay_envelope_(
     return false;
   }
   frame.assign(plaintext.begin() + 10, plaintext.end());
-  uint16_t sequence = 0;
-  return validate_relay_frame_(frame, main_param, sequence);
+  // Authentication/decryption and command validation are separate layers.
+  // relay_service() selects the strict validator from the armed transaction:
+  // ordinary OPEN/CLOSE/STOP or one exact MY step. Validating only the
+  // ordinary 25-byte shape here made every 27-byte MY envelope unreachable.
+  return true;
 }
 
 bool SomfyIohcManager::parse_token_(const std::string &value,

@@ -121,6 +121,8 @@ def test_redundant_my_uses_four_encrypted_ordered_exact_frames():
     assert 'action != "send_more"' in relay
     assert '"relay_my_complete"' in relay
     assert "frame.size() != 27" in validator
+    assert "frame[8] == 0" not in validator
+    assert "CMD_EXECUTE is 0x00" in validator
     assert "BUTTON_ACTION_STOP_MY" in validator
     for forbidden in ("nextCode", "seedNextCode", "storage_"):
         assert forbidden not in relay + validator
@@ -133,6 +135,23 @@ def test_redundant_my_uses_four_encrypted_ordered_exact_frames():
         "runtime_program",
     ):
         assert forbidden not in service + sender
+
+
+def test_relay_envelope_decryption_defers_shape_validation_to_armed_mode():
+    decryptor = _function(
+        MANAGER_CPP,
+        "bool SomfyIohcManager::decrypt_relay_envelope_",
+        "bool SomfyIohcManager::parse_token_",
+    )
+    relay = _function(
+        MANAGER_CPP,
+        "void SomfyIohcManager::relay_service",
+        "bool SomfyIohcManager::validate_my_relay_frame_",
+    )
+    assert "frame.assign" in decryptor
+    assert "validate_relay_frame_" not in decryptor
+    assert "validate_my_relay_frame_" in relay
+    assert "validate_relay_frame_" in relay
 
 
 def test_primary_offers_canonical_frame_only_after_local_transmit():
