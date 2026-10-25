@@ -1,6 +1,6 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import remote_receiver, remote_transmitter
+from esphome.components import remote_base, remote_receiver, remote_transmitter
 from esphome.const import CONF_ID, CONF_TYPE, PLATFORM_ESP32
 
 CODEOWNERS = ["@LeonardPitzu"]
@@ -73,6 +73,7 @@ async def to_code(config):
         if CONF_REMOTE_RECEIVER in config:
             rx = await cg.get_variable(config[CONF_REMOTE_RECEIVER])
             cg.add(var.set_remote_receiver(rx))
+            remote_base.add_listener(rx, var)
             cg.add_define("USE_SOMFY_COVER_RX")
 
     elif typ == TYPE_IOHC:

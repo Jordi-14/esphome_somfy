@@ -42,12 +42,6 @@ struct RtsFrame {
 
 void SomfyRtsHub::setup() {
   ESP_LOGCONFIG(TAG, "Setting up Somfy RTS hub...");
-#ifdef USE_SOMFY_COVER_RX
-  if (this->remote_receiver_ != nullptr) {
-    ESP_LOGD(TAG, "Registering RX listener on hub");
-    this->remote_receiver_->register_listener(this);
-  }
-#endif
 }
 
 void SomfyRtsHub::loop() {}

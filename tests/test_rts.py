@@ -1,5 +1,7 @@
 """Tests for RTS-specific config validation."""
 
+from pathlib import Path
+
 import esphome.config_validation as cv
 import pytest
 from somfy.cover import (
@@ -17,6 +19,14 @@ from somfy.cover import (
 
 RX_HUB = {CONF_ID: "rts_radio", CONF_REMOTE_RECEIVER: "receiver_id"}
 TX_ONLY_HUB = {CONF_ID: "rts_radio"}
+
+
+def test_receiver_listener_is_registered_during_codegen():
+    root = Path(__file__).parent.parent
+    source = (root / "components" / "somfy" / "__init__.py").read_text()
+    hub_source = (root / "components" / "somfy" / "somfy_hub_rts.cpp").read_text()
+    assert "remote_base.add_listener(rx, var)" in source
+    assert "remote_receiver_->register_listener(this)" not in hub_source
 
 
 # ---------------------------------------------------------------------------

@@ -145,8 +145,12 @@ struct Rig {
     g_rolling_code = 1;
 
     this->hub.set_remote_transmitter(&this->tx);
-    if (with_receiver)
+    if (with_receiver) {
       this->hub.set_remote_receiver(&this->rx);
+      // Current ESPHome allocates and registers receiver listeners during
+      // code generation rather than from Component::setup().
+      this->rx.register_listener(&this->hub);
+    }
     this->hub.setup();
 
     this->cover.set_hub(&this->hub);
