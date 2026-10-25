@@ -2,7 +2,6 @@
 
 import esphome.config_validation as cv
 import pytest
-
 from somfy.cover import (
     CONF_ENCRYPTION_KEY,
     CONF_IOHC_MODE,
