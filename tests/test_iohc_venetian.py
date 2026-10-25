@@ -167,5 +167,6 @@ def test_manager_exposes_receive_pipeline_counters_on_demand():
     assert "rx_valid_frame_count_" in HUB_H
     assert "accepted_remote_command_count_" in MANAGER_H
     assert 'action == "rx_stats"' in MANAGER_CPP
-    assert 'this->publish_status_("rx_stats"' in MANAGER_CPP
-    assert '"raw=%" PRIu32 ",valid=%" PRIu32 ",accepted=%" PRIu32' in MANAGER_CPP
+    assert 'this->publish_rx_stats_(slot)' in MANAGER_CPP
+    assert r'\"raw\":%" PRIu32 ",\"valid\":%" PRIu32' in MANAGER_CPP
+    assert r'\"accepted\":%" PRIu32' in MANAGER_CPP

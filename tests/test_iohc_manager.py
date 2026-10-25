@@ -1,6 +1,7 @@
 """Validation tests for the runtime IOHC commissioning manager."""
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -104,7 +105,7 @@ def test_uncertain_pairing_can_only_retry_the_same_persisted_identity():
 
 
 def test_manager_advertises_same_identity_pairing_retry_capability():
-    assert r'\"pair_retry\":true' in _manager_cpp()
+    assert "MANAGER_CAPABILITIES = 0x1F" in _manager_cpp()
 
 
 def test_manager_serializes_complete_my_gestures_across_slots():
@@ -131,7 +132,7 @@ def test_manager_serializes_complete_my_gestures_across_slots():
     assert "managed.cover->runtime_my()" in source
     assert "MY_INTER_TRANSACTION_GAP_MS" in source
     assert 'set_timeout("iohc-my-next"' in source
-    assert r'\"my_queue\":true' in source
+    assert "MANAGER_CAPABILITIES = 0x1F" in source
 
     assert "set_my_sequence_complete_callback" in cover_header
     assert "my_sequence_active_" in cover_header
@@ -246,8 +247,8 @@ def test_remote_events_report_the_actual_group_source_and_rssi():
     assert "stage_remote_command_(index, main_param, remote, rssi, step_count)" in source
     assert "pending.slot_mask |= uint32_t{1} << slot" in source
     assert 'publish_status_("remote_command", first_slot, detail, pending.rssi' in source
-    assert '\\"slots\\":%s' in source
-    assert '\\"steps\\":%u' in source
+    assert 'output += ",\\"slots\\":["' in source
+    assert 'output += ",\\"steps\\":"' in source
 
 
 def test_manager_exposes_versioned_status_without_native_ui_buttons():
@@ -259,8 +260,96 @@ def test_manager_exposes_versioned_status_without_native_ui_buttons():
         root / "components" / "somfy_iohc_manager" / "somfy_iohc_manager.h"
     ).read_text()
     source = _manager_cpp()
-    assert r'{\"v\":1' in source
+    assert "MANAGER_API_VERSION = 2" in source
     assert 'AUTO_LOAD = ["cover", "text_sensor"]' in manager_python
     assert 'CORE.register_platform_component("button", var)' not in manager_python
     assert "App.register_button" not in source
     assert "SomfyIohcMyButton" not in manager_header
+
+
+def test_every_manager_status_is_bounded_for_home_assistant():
+    source = _manager_cpp()
+    assert "HOME_ASSISTANT_STATE_MAX_LENGTH = 255" in source
+    assert "status.size() <= HOME_ASSISTANT_STATE_MAX_LENGTH" in source
+    assert "status_too_long" in source
+    assert source.count("status_sensor_->publish_state") == 2
+    bounded = source.split("void SomfyIohcManager::publish_bounded_status_", 1)[1]
+    bounded = bounded.split("void SomfyIohcManager::publish_remote_observation_", 1)[0]
+    assert bounded.index("this->event_counter_++") < bounded.index("status_too_long")
+    for publisher in (
+        "publish_status_",
+        "publish_remote_observation_",
+        "publish_relay_event_",
+        "publish_transfer_event_",
+        "publish_transfer_state_",
+        "publish_rx_stats_",
+    ):
+        function = source.split(f"void SomfyIohcManager::{publisher}", 1)[1]
+        assert "publish_bounded_status_" in function
+
+
+def test_api_v2_worst_case_status_shapes_fit_home_assistant_state_limit():
+    relay_envelope = "F" * (2 * (1 + 12 + 10 + 25 + 16))
+    payloads = (
+        {
+            "v": 2,
+            "caps": 31,
+            "event": 4294967295,
+            "action": "rx_stats",
+            "slot": 19,
+            "raw": 4294967295,
+            "valid": 4294967295,
+            "accepted": 4294967295,
+            "last_rssi": -999.9,
+            "raw_rssi": -999.9,
+            "freq_offset": -999999999,
+        },
+        {
+            "v": 2,
+            "caps": 31,
+            "event": 4294967295,
+            "action": "remote_command",
+            "slot": 19,
+            "slots": list(range(20)),
+            "steps": 255,
+            "remote": "0xFFFFFF",
+            "rssi": -999.9,
+            "detail": "tilt_counterclockwise",
+        },
+        {
+            "v": 2,
+            "observation_v": 1,
+            "event": 4294967295,
+            "action": "remote_observation",
+            "remote": "0xFFFFFF",
+            "command": "tilt_counterclockwise",
+            "sequence": 65535,
+            "has_sequence": True,
+            "complete": True,
+            "steps": 255,
+            "rssi": -999.9,
+            "slot_mask": 4294967295,
+        },
+        {
+            "v": 2,
+            "relay_v": 1,
+            "action": "relay_offer",
+            "slot": 19,
+            "command": "close",
+            "relay_token": "F" * 16,
+            "relay_envelope": relay_envelope,
+        },
+        {
+            "v": 2,
+            "transfer_v": 1,
+            "event": 4294967295,
+            "action": "transfer_destination_imported",
+            "slot": 19,
+            "transfer_token": "F" * 16,
+            "detail": "ensure_source_bridge_remains_online_until_commit",
+        },
+    )
+    lengths = [
+        len(json.dumps(payload, separators=(",", ":"))) for payload in payloads
+    ]
+    assert max(lengths) <= 255

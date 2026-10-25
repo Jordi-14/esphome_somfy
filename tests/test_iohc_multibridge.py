@@ -234,7 +234,7 @@ def test_normalized_observation_status_has_cross_bridge_dedup_fields():
         r'\"slot_mask\"',
     ):
         assert field in publisher
-    assert 'publish_state(output)' in publisher
+    assert "publish_bounded_status_(output, -1)" in publisher
 
 
 def test_prefix_and_terminal_observations_keep_distinct_evidence_quality():
@@ -451,11 +451,10 @@ def test_manager_advertises_multi_bridge_capabilities_additively():
         "void SomfyIohcManager::publish_status_",
         "void SomfyIohcManager::stage_remote_command_",
     )
-    assert r'{\"v\":1' in publisher
-    assert r'\"multi_bridge\":true' in publisher
-    # Compact bit mask stays within ESPHome's 255-byte text-state transport:
-    # observation=1, estimator apply=2, exact relay=4, transfer=8.
-    assert r'\"mb_caps\":15' in publisher
+    assert "MANAGER_API_VERSION" in publisher
+    # API v2 uses one compact bit mask: pairing retry=1, observation=2,
+    # exact relay=4, transfer=8, and atomic MY queue=16.
+    assert "MANAGER_CAPABILITIES" in publisher
 
 
 def test_archiving_hard_quiesces_every_delayed_transmit_path():
@@ -673,5 +672,5 @@ def test_rx_stats_expose_raw_frequency_diagnostics_before_crc_validation():
         "void SomfyIohcManager::publish_rx_stats_",
         "void SomfyIohcManager::publish_backup_",
     )
-    assert 'raw_rssi=%.1f,freq_offset=%.0f' in stats
+    assert r'\"raw_rssi\":%.1f,\"freq_offset\":%.0f' in stats
     assert "get_last_raw_frequency_offset()" in stats

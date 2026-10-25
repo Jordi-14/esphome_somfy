@@ -35,8 +35,19 @@ The following invariants are mandatory:
 
 ## Firmware capabilities and services
 
-The manager advertises the multi-bridge capabilities in its versioned status
-JSON. Older fields and the existing status version remain backward compatible.
+Manager API v2 advertises all supported behavior through one `caps` bitmask in
+its bounded status JSON. It is an intentional contract break from the verbose
+v1 status schema; use it with Somfy IO Shutter Manager 0.8.2 or newer.
+
+The capability bits are:
+
+```text
+0x01  protected same-identity pairing retry
+0x02  cross-bridge observation
+0x04  exact-frame redundant relay
+0x08  guarded controller ownership transfer
+0x10  atomic native-MY queue
+```
 
 The additive native API services are:
 

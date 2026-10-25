@@ -80,6 +80,9 @@ constexpr uint32_t TRANSFER_JOURNAL_MAGIC = 0x58464552;  // "XFER"
 constexpr uint8_t TRANSFER_JOURNAL_VERSION = 1;
 constexpr uint8_t RELAY_ENVELOPE_VERSION = 1;
 constexpr char RELAY_GCM_AAD[] = "somfy-io-relay-v1";
+constexpr uint8_t MANAGER_API_VERSION = 2;
+constexpr uint8_t MANAGER_CAPABILITIES = 0x1F;
+constexpr size_t HOME_ASSISTANT_STATE_MAX_LENGTH = 255;
 
 void record_key(uint8_t slot, char output[8]) {
   snprintf(output, 8, "slot%02u", static_cast<unsigned>(slot));
@@ -2425,40 +2428,78 @@ void SomfyIohcManager::publish_status_(
   if (this->status_sensor_ == nullptr)
     return;
   this->event_counter_++;
-  char state[16] = "none";
-  uint32_t node = 0;
-  uint32_t remote = 0;
-  uint16_t next = 0;
-  if (this->valid_slot_(slot)) {
+  std::string output = "{\"v\":" + std::to_string(MANAGER_API_VERSION) +
+                       ",\"caps\":" + std::to_string(MANAGER_CAPABILITIES) +
+                       ",\"event\":" + std::to_string(this->event_counter_) +
+                       ",\"action\":\"" + action + "\",\"slot\":" +
+                       std::to_string(slot);
+
+  if (slot_mask != 0) {
+    output += ",\"slots\":[";
+    bool first = true;
+    for (uint8_t index = 0; index < this->slots_.size(); index++) {
+      if ((slot_mask & (uint32_t{1} << index)) == 0)
+        continue;
+      if (!first)
+        output += ',';
+      output += std::to_string(index);
+      first = false;
+    }
+    output += ']';
+  }
+  if (step_count != 0)
+    output += ",\"steps\":" + std::to_string(step_count);
+
+  if (this->valid_slot_(slot) && strcmp(action, "slot") == 0) {
     const auto &managed = this->slots_[slot];
-    strlcpy(state, state_name_(static_cast<ManagedSlotState>(managed.record.state)), sizeof(state));
-    node = managed.record.node_id;
-    remote = managed.record.physical_remote;
-    next = managed.cover->peek_next_rolling_code();
+    uint16_t next = managed.cover->peek_next_rolling_code();
     if (next == 0)
       next = managed.record.initial_rolling_code;
+    char identity[112];
+    snprintf(identity, sizeof(identity),
+             ",\"state\":\"%s\",\"node\":\"0x%06" PRIX32
+             "\",\"remote\":\"0x%06" PRIX32 "\",\"next\":%u",
+             state_name_(static_cast<ManagedSlotState>(managed.record.state)),
+             managed.record.node_id, managed.record.physical_remote, next);
+    output += identity;
+  } else if (remote_override != 0) {
+    char remote[24];
+    snprintf(remote, sizeof(remote), ",\"remote\":\"0x%06" PRIX32 "\"",
+             remote_override & 0x00FFFFFF);
+    output += remote;
   }
-  if (remote_override != 0)
-    remote = remote_override & 0x00FFFFFF;
-  std::string slots = "[";
-  for (uint8_t index = 0; index < this->slots_.size(); index++) {
-    if ((slot_mask & (uint32_t{1} << index)) == 0)
-      continue;
-    if (slots.size() > 1)
-      slots += ',';
-    slots += std::to_string(index);
+  if (rssi != 0.0f) {
+    char value[24];
+    snprintf(value, sizeof(value), ",\"rssi\":%.1f", rssi);
+    output += value;
   }
-  slots += ']';
-  char output[384];
-  snprintf(output, sizeof(output),
-           "{\"v\":1,\"pair_retry\":true,\"my_queue\":true,\"multi_bridge\":true,\"mb_caps\":15,\"event\":%" PRIu32 ",\"action\":\"%s\",\"slot\":%" PRId32
-           ",\"slots\":%s"
-           ",\"steps\":%u"
-           ",\"state\":\"%s\",\"node\":\"0x%06" PRIX32 "\",\"remote\":\"0x%06" PRIX32
-           "\",\"next\":%u,\"rssi\":%.1f,\"detail\":\"%s\"}",
-           this->event_counter_, action, slot, slots.c_str(), step_count,
-           state, node, remote, next, rssi, detail);
-  this->status_sensor_->publish_state(output);
+  if (detail != nullptr && detail[0] != '\0') {
+    output += ",\"detail\":\"";
+    output += detail;
+    output += '"';
+  }
+  output += '}';
+  this->publish_bounded_status_(output, slot);
+}
+
+void SomfyIohcManager::publish_bounded_status_(const std::string &status,
+                                                int32_t slot) {
+  if (this->status_sensor_ == nullptr)
+    return;
+  if (status.size() <= HOME_ASSISTANT_STATE_MAX_LENGTH) {
+    this->status_sensor_->publish_state(status);
+    return;
+  }
+  ESP_LOGE(TAG, "Refusing oversized manager status (%u bytes)",
+           static_cast<unsigned>(status.size()));
+  this->event_counter_++;
+  char fallback[128];
+  snprintf(fallback, sizeof(fallback),
+           "{\"v\":%u,\"caps\":%u,\"event\":%" PRIu32
+           ",\"action\":\"error\",\"slot\":%" PRId32
+           ",\"detail\":\"status_too_long\"}",
+           MANAGER_API_VERSION, MANAGER_CAPABILITIES, this->event_counter_, slot);
+  this->status_sensor_->publish_state(fallback);
 }
 
 void SomfyIohcManager::publish_remote_observation_(
@@ -2470,7 +2511,7 @@ void SomfyIohcManager::publish_remote_observation_(
   this->event_counter_++;
   char output[384];
   snprintf(output, sizeof(output),
-           "{\"v\":1,\"observation_v\":1,\"event\":%" PRIu32
+           "{\"v\":2,\"observation_v\":1,\"event\":%" PRIu32
            ",\"action\":\"remote_observation\",\"remote\":\"0x%06" PRIX32
            "\",\"command\":\"%s\",\"sequence\":%u,\"has_sequence\":%s"
            ",\"complete\":%s,\"steps\":%u,\"rssi\":%.1f"
@@ -2478,7 +2519,7 @@ void SomfyIohcManager::publish_remote_observation_(
            this->event_counter_, remote & 0x00FFFFFF, command, sequence,
            has_sequence ? "true" : "false", complete ? "true" : "false",
            steps, rssi, slot_mask);
-  this->status_sensor_->publish_state(output);
+  this->publish_bounded_status_(output, -1);
 }
 
 void SomfyIohcManager::publish_relay_event_(
@@ -2493,21 +2534,21 @@ void SomfyIohcManager::publish_relay_event_(
     // relay envelope below ESPHome's text-state limit. relay_token is random,
     // so every offer is still a distinct state.
     snprintf(output, sizeof(output),
-             "{\"v\":1,\"relay_v\":1,\"action\":\"%s\",\"slot\":%" PRId32
+             "{\"v\":2,\"relay_v\":1,\"action\":\"%s\",\"slot\":%" PRId32
              ",\"command\":\"%s\",\"relay_token\":\"%s\""
              ",\"relay_envelope\":\"%s\"}",
              action, slot, command, token_text.c_str(), envelope.c_str());
   } else {
     this->event_counter_++;
     snprintf(output, sizeof(output),
-             "{\"v\":1,\"relay_v\":1,\"event\":%" PRIu32
+             "{\"v\":2,\"relay_v\":1,\"event\":%" PRIu32
              ",\"action\":\"%s\",\"slot\":%" PRId32
              ",\"command\":\"%s\",\"relay_token\":\"%s\""
              ",\"detail\":\"%s\"}",
              this->event_counter_, action, slot, command, token_text.c_str(),
              detail);
   }
-  this->status_sensor_->publish_state(output);
+  this->publish_bounded_status_(output, slot);
 }
 
 void SomfyIohcManager::publish_transfer_event_(const char *action,
@@ -2518,13 +2559,13 @@ void SomfyIohcManager::publish_transfer_event_(const char *action,
     return;
   this->event_counter_++;
   const std::string token_text = token == 0 ? "" : format_token_(token);
-  char output[256];
+  char output[384];
   snprintf(output, sizeof(output),
-           "{\"v\":1,\"transfer_v\":1,\"event\":%" PRIu32
+           "{\"v\":2,\"transfer_v\":1,\"event\":%" PRIu32
            ",\"action\":\"%s\",\"slot\":%" PRId32
            ",\"transfer_token\":\"%s\",\"detail\":\"%s\"}",
            this->event_counter_, action, slot, token_text.c_str(), detail);
-  this->status_sensor_->publish_state(output);
+  this->publish_bounded_status_(output, slot);
 }
 
 void SomfyIohcManager::publish_transfer_state_(int32_t slot, uint64_t token,
@@ -2534,14 +2575,14 @@ void SomfyIohcManager::publish_transfer_state_(int32_t slot, uint64_t token,
     return;
   this->event_counter_++;
   const std::string token_text = token == 0 ? "" : format_token_(token);
-  char output[256];
+  char output[384];
   snprintf(output, sizeof(output),
-           "{\"v\":1,\"transfer_v\":1,\"event\":%" PRIu32
+           "{\"v\":2,\"transfer_v\":1,\"event\":%" PRIu32
            ",\"action\":\"transfer_state\",\"slot\":%" PRId32
            ",\"transfer_token\":\"%s\",\"role\":\"%s\""
            ",\"phase\":\"%s\"}",
            this->event_counter_, slot, token_text.c_str(), role, phase);
-  this->status_sensor_->publish_state(output);
+  this->publish_bounded_status_(output, slot);
 }
 
 void SomfyIohcManager::stage_remote_command_(uint8_t slot,
@@ -2593,17 +2634,23 @@ void SomfyIohcManager::flush_pending_remote_command_() {
 }
 
 void SomfyIohcManager::publish_rx_stats_(int32_t slot) {
-  char detail[192];
-  snprintf(detail, sizeof(detail),
-           "raw=%" PRIu32 ",valid=%" PRIu32 ",accepted=%" PRIu32
-           ",last_rssi=%.1f,raw_rssi=%.1f,freq_offset=%.0f",
+  if (this->status_sensor_ == nullptr)
+    return;
+  this->event_counter_++;
+  char output[384];
+  snprintf(output, sizeof(output),
+           "{\"v\":2,\"caps\":%u,\"event\":%" PRIu32
+           ",\"action\":\"rx_stats\",\"slot\":%" PRId32
+           ",\"raw\":%" PRIu32 ",\"valid\":%" PRIu32
+           ",\"accepted\":%" PRIu32 ",\"last_rssi\":%.1f"
+           ",\"raw_rssi\":%.1f,\"freq_offset\":%.0f}",
+           MANAGER_CAPABILITIES, this->event_counter_, slot,
            this->hub_->get_rx_raw_packet_count(),
            this->hub_->get_rx_valid_frame_count(),
            this->accepted_remote_command_count_, this->hub_->get_last_valid_rssi(),
            this->hub_->get_last_raw_rssi(),
            this->hub_->get_last_raw_frequency_offset());
-  this->publish_status_("rx_stats", slot, detail,
-                        this->hub_->get_last_valid_rssi());
+  this->publish_bounded_status_(output, slot);
 }
 
 void SomfyIohcManager::publish_backup_(uint8_t slot) {

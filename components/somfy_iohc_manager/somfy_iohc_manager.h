@@ -299,6 +299,7 @@ class SomfyIohcManager : public Component, public api::CustomAPIDevice {
   void publish_status_(const char *action, int32_t slot, const char *detail = "",
                        float rssi = 0.0f, uint32_t remote_override = 0,
                        uint32_t slot_mask = 0, uint8_t step_count = 0);
+  void publish_bounded_status_(const std::string &status, int32_t slot);
   void publish_remote_observation_(const char *command, uint32_t remote,
                                    uint16_t sequence, bool has_sequence,
                                    bool complete, uint8_t steps, float rssi,

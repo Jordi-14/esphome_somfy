@@ -381,9 +381,17 @@ at that boundary cannot trigger an automatic retry. If the second jog is
 uncertain, it preserves that identity and offers a resume path instead of
 blindly generating or retransmitting controllers.
 
-The firmware status contract is versioned. This manager emits API version `1`;
+The firmware status contract is versioned. This manager emits API version `2`;
 compatible Home Assistant integration releases validate that version before
 using manager events.
+
+API v2 keeps every status published through Home Assistant's state transport at
+or below 255 characters. It advertises supported behavior through a compact
+`caps` bitmask, omits fields irrelevant to the current action, and publishes
+receiver diagnostics as numeric `raw`, `valid`, `accepted`, `last_rssi`,
+`raw_rssi`, and `freq_offset` fields. Every status family passes through the
+same length guard; an unexpected oversized message becomes a valid explicit
+`status_too_long` error rather than truncated JSON.
 
 Do not run the same restored controller identity on two powered bridges. A
 rolling-code identity has one owner; switch the old bridge off before moving a
