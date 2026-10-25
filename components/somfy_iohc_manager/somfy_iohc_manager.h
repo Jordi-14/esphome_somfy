@@ -191,6 +191,14 @@ class SomfyIohcManager : public Component, public api::CustomAPIDevice {
   uint8_t relay_capture_slot_{0};
   uint16_t relay_capture_param_{0};
   bool relay_capture_completed_{false};
+  bool relay_source_my_active_{false};
+  uint64_t relay_source_my_token_{0};
+  uint8_t relay_source_my_slot_{0};
+  uint8_t relay_source_my_next_step_{0};
+  uint32_t relay_source_my_last_frame_ms_{0};
+  uint32_t relay_source_my_deadline_ms_{0};
+  bool relay_receiver_my_active_{false};
+  uint8_t relay_receiver_my_next_step_{0};
 
   nvs_handle registry_handle_{0};
   bool registry_open_{false};
@@ -223,6 +231,7 @@ class SomfyIohcManager : public Component, public api::CustomAPIDevice {
                             std::string slots);
   void redundant_control_service(int32_t slot, std::string command,
                                  std::string relay_token);
+  void send_redundant_my_step_(uint8_t slot, uint8_t step);
   void relay_service(std::string action, std::string payload);
   void observe_service(int32_t slot, std::string command, int32_t steps);
   void transfer_service(std::string action, int32_t slot,
@@ -319,6 +328,8 @@ class SomfyIohcManager : public Component, public api::CustomAPIDevice {
   void on_relayable_frame_(uint8_t slot, uint16_t main_param,
                            const std::vector<uint8_t> &frame,
                            uint8_t repeat_count);
+  bool validate_my_relay_frame_(const std::vector<uint8_t> &frame,
+                                uint8_t step, uint16_t &sequence);
   void stage_observed_stop_(uint32_t remote, float rssi, uint16_t sequence,
                             bool has_sequence, uint8_t steps);
   void flush_observed_stop_();

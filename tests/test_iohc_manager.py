@@ -105,7 +105,7 @@ def test_uncertain_pairing_can_only_retry_the_same_persisted_identity():
 
 
 def test_manager_advertises_same_identity_pairing_retry_capability():
-    assert "MANAGER_CAPABILITIES = 0x1F" in _manager_cpp()
+    assert "MANAGER_CAPABILITIES = 0x3F" in _manager_cpp()
 
 
 def test_manager_serializes_complete_my_gestures_across_slots():
@@ -132,7 +132,7 @@ def test_manager_serializes_complete_my_gestures_across_slots():
     assert "managed.cover->runtime_my()" in source
     assert "MY_INTER_TRANSACTION_GAP_MS" in source
     assert 'set_timeout("iohc-my-next"' in source
-    assert "MANAGER_CAPABILITIES = 0x1F" in source
+    assert "MANAGER_CAPABILITIES = 0x3F" in source
 
     assert "set_my_sequence_complete_callback" in cover_header
     assert "my_sequence_active_" in cover_header

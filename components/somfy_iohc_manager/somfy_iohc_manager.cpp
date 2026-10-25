@@ -29,6 +29,7 @@ constexpr uint32_t DISCOVERY_TIMEOUT_MS = 120000;
 constexpr uint32_t ALIAS_DISCOVERY_TIMEOUT_MS = 120000;
 constexpr uint32_t PAIR_ARM_TIMEOUT_MS = 60000;
 constexpr uint32_t RELAY_ARM_TIMEOUT_MS = 5000;
+constexpr uint32_t RELAY_MY_SOURCE_TIMEOUT_MS = 5000;
 // A relayed ordinary STOP is also heard as a D200 prefix by the secondary.
 // Let its 350 ms STOP/MY correlation window flush before publishing the relay
 // acknowledgement, otherwise native-API state batching can coalesce away the
@@ -81,7 +82,7 @@ constexpr uint8_t TRANSFER_JOURNAL_VERSION = 1;
 constexpr uint8_t RELAY_ENVELOPE_VERSION = 1;
 constexpr char RELAY_GCM_AAD[] = "somfy-io-relay-v1";
 constexpr uint8_t MANAGER_API_VERSION = 2;
-constexpr uint8_t MANAGER_CAPABILITIES = 0x1F;
+constexpr uint8_t MANAGER_CAPABILITIES = 0x3F;
 constexpr size_t HOME_ASSISTANT_STATE_MAX_LENGTH = 255;
 
 void record_key(uint8_t slot, char output[8]) {
@@ -403,6 +404,12 @@ void SomfyIohcManager::loop() {
     this->relay_armed_ = false;
     this->relay_token_ = 0;
     this->publish_relay_event_("relay_expired", -1, "", 0);
+  }
+  if (this->relay_source_my_active_ &&
+      static_cast<int32_t>(now - this->relay_source_my_deadline_ms_) >= 0) {
+    this->relay_source_my_active_ = false;
+    this->relay_source_my_token_ = 0;
+    this->publish_status_("error", -1, "redundant_my_expired");
   }
   if (this->discovery_slot_ >= 0 &&
       static_cast<int32_t>(now - this->discovery_deadline_ms_) >= 0) {
@@ -909,6 +916,48 @@ void SomfyIohcManager::redundant_control_service(
     return;
   }
 
+  int8_t my_step = -1;
+  if (command == "my") my_step = 0;
+  else if (command == "my_1") my_step = 1;
+  else if (command == "my_2") my_step = 2;
+  else if (command == "my_3") my_step = 3;
+
+  if (my_step >= 0) {
+    const uint8_t step = static_cast<uint8_t>(my_step);
+    if (step == 0) {
+      if (this->relay_source_my_active_ || this->active_my_slot_ >= 0) {
+        this->publish_status_("error", slot, "relay_source_busy");
+        return;
+      }
+      this->relay_source_my_active_ = true;
+      this->relay_source_my_token_ = token;
+      this->relay_source_my_slot_ = static_cast<uint8_t>(slot);
+      this->relay_source_my_next_step_ = 0;
+    } else if (!this->relay_source_my_active_ ||
+               token != this->relay_source_my_token_ ||
+               slot != this->relay_source_my_slot_ ||
+               step != this->relay_source_my_next_step_) {
+      this->publish_status_("error", slot, "invalid_redundant_my_step");
+      return;
+    }
+    this->relay_source_my_deadline_ms_ = millis() + RELAY_MY_SOURCE_TIMEOUT_MS;
+    const uint32_t minimum_gap =
+        step == 1 ? iohc_cmd::MY_PRESTOP_SETTLE_MS
+                  : (step == 2 ? iohc_cmd::MY_EVENT_DELAY_MS
+                               : (step == 3 ? iohc_cmd::MY_RELEASE_DELAY_MS : 0));
+    const uint32_t elapsed = millis() - this->relay_source_my_last_frame_ms_;
+    if (step > 0 && elapsed < minimum_gap) {
+      const uint32_t timeout_id = 0x4D590100UL | step;
+      this->set_timeout(timeout_id, minimum_gap - elapsed,
+                        [this, slot = static_cast<uint8_t>(slot), step]() {
+        this->send_redundant_my_step_(slot, step);
+      });
+    } else {
+      this->send_redundant_my_step_(static_cast<uint8_t>(slot), step);
+    }
+    return;
+  }
+
   uint16_t main_param = 0;
   if (command == "open")
     main_param = iohc_cmd::MP_OPEN;
@@ -917,8 +966,8 @@ void SomfyIohcManager::redundant_control_service(
   else if (command == "stop")
     main_param = iohc_cmd::MP_STOP;
   else {
-    // MY, position, Venetian tilt and every commissioning command are
-    // intentionally outside the redundant single-frame allowlist.
+    // Position, Venetian tilt and every commissioning command remain outside
+    // the redundant exact-frame allowlist.
     this->publish_status_("error", slot, "command_not_relayable");
     return;
   }
@@ -950,17 +999,51 @@ void SomfyIohcManager::redundant_control_service(
     this->publish_status_("error", slot, "primary_transmit_failed");
 }
 
+void SomfyIohcManager::send_redundant_my_step_(uint8_t slot, uint8_t step) {
+  if (!this->relay_source_my_active_ || slot != this->relay_source_my_slot_ ||
+      step != this->relay_source_my_next_step_ || step >= 4)
+    return;
+  static constexpr uint16_t EXPECTED[] = {
+      iohc_cmd::MP_STOP, iohc_cmd::RELAY_MY_EXECUTE,
+      iohc_cmd::RELAY_MY_PRESS, iohc_cmd::RELAY_MY_RELEASE};
+  this->relay_capture_active_ = true;
+  this->relay_capture_completed_ = false;
+  this->relay_capture_token_ = this->relay_source_my_token_;
+  this->relay_capture_slot_ = slot;
+  this->relay_capture_param_ = EXPECTED[step];
+  const bool sent = this->slots_[slot].cover->runtime_redundant_my_step(step);
+  const bool captured = this->relay_capture_completed_;
+  this->relay_capture_active_ = false;
+  this->relay_capture_token_ = 0;
+  if (!sent || !captured) {
+    this->relay_source_my_active_ = false;
+    this->relay_source_my_token_ = 0;
+    this->publish_status_("error", slot, "primary_transmit_failed");
+    return;
+  }
+  this->relay_source_my_last_frame_ms_ = millis();
+  this->relay_source_my_next_step_++;
+  if (step == 3) {
+    this->relay_source_my_active_ = false;
+    this->relay_source_my_token_ = 0;
+  }
+}
+
 void SomfyIohcManager::relay_service(std::string action,
                                      std::string payload) {
-  if (action == "arm") {
+  if (action == "arm" || action == "arm_my") {
     uint64_t token = 0;
     do {
       token = (static_cast<uint64_t>(esp_random()) << 32U) | esp_random();
     } while (token == 0);
     this->relay_armed_ = true;
+    this->relay_receiver_my_active_ = action == "arm_my";
+    this->relay_receiver_my_next_step_ = 0;
     this->relay_token_ = token;
     this->relay_deadline_ms_ = millis() + RELAY_ARM_TIMEOUT_MS;
-    this->publish_relay_event_("relay_armed", -1, "", token);
+    this->publish_relay_event_("relay_armed", -1,
+                               this->relay_receiver_my_active_ ? "my" : "",
+                               token);
     return;
   }
   if (action == "cancel") {
@@ -971,11 +1054,12 @@ void SomfyIohcManager::relay_service(std::string action,
       return;
     }
     this->relay_armed_ = false;
+    this->relay_receiver_my_active_ = false;
     this->relay_token_ = 0;
     this->publish_relay_event_("relay_cancelled", -1, "", token);
     return;
   }
-  if (action != "send") {
+  if (action != "send" && action != "send_more") {
     this->publish_status_("error", -1, "unknown_relay_action");
     return;
   }
@@ -986,8 +1070,20 @@ void SomfyIohcManager::relay_service(std::string action,
   uint8_t repeat_count = 0;
   std::vector<uint8_t> frame;
   if (!this->decrypt_relay_envelope_(payload, token, main_param, frame,
-                                     repeat_count) ||
-      !validate_relay_frame_(frame, main_param, sequence)) {
+                                     repeat_count)) {
+    this->publish_status_("error", -1, "invalid_relay_envelope");
+    return;
+  }
+  const bool my_frame = this->relay_receiver_my_active_;
+  if (my_frame) {
+    if (!this->validate_my_relay_frame_(
+            frame, this->relay_receiver_my_next_step_, sequence) ||
+        (this->relay_receiver_my_next_step_ < 3 && action != "send_more") ||
+        (this->relay_receiver_my_next_step_ == 3 && action != "send")) {
+      this->publish_status_("error", -1, "invalid_relay_my_envelope");
+      return;
+    }
+  } else if (!validate_relay_frame_(frame, main_param, sequence)) {
     this->publish_status_("error", -1, "invalid_relay_envelope");
     return;
   }
@@ -1001,12 +1097,28 @@ void SomfyIohcManager::relay_service(std::string action,
     return;
   }
 
-  // Consume the challenge before the first RF byte. A disconnect, duplicate
-  // HA service call or delayed stale envelope can therefore never transmit a
-  // second independently-triggered copy.
-  this->relay_armed_ = false;
-  this->relay_token_ = 0;
+  const uint8_t my_step = this->relay_receiver_my_next_step_;
+  const bool final_my_frame = my_frame && my_step == 3;
+  // Ordinary frames and the final MY frame consume the challenge before the
+  // first RF byte. Intermediate MY frames retain it only for the strictly
+  // ordered next envelope.
+  if (!my_frame || final_my_frame) {
+    this->relay_armed_ = false;
+    this->relay_token_ = 0;
+    this->relay_receiver_my_active_ = false;
+  } else {
+    this->relay_receiver_my_next_step_++;
+    this->relay_deadline_ms_ = millis() + RELAY_ARM_TIMEOUT_MS;
+  }
   this->hub_->transmit_packet(frame, repeat_count);
+  if (my_frame) {
+    char detail[24];
+    snprintf(detail, sizeof(detail), "step_%u", my_step);
+    this->publish_relay_event_(final_my_frame ? "relay_my_complete"
+                                             : "relay_sent",
+                               -1, "my", token, "", detail);
+    return;
+  }
   const char *command = main_param == iohc_cmd::MP_OPEN
                             ? "open"
                             : (main_param == iohc_cmd::MP_CLOSE ? "close"
@@ -1025,6 +1137,39 @@ void SomfyIohcManager::relay_service(std::string action,
     snprintf(detail, sizeof(detail), "sequence_%u", sequence);
     this->publish_relay_event_("relay_sent", -1, command, token, "", detail);
   }
+}
+
+bool SomfyIohcManager::validate_my_relay_frame_(
+    const std::vector<uint8_t> &frame, uint8_t step, uint16_t &sequence) {
+  if (crc16_kermit(frame.data(), frame.size()) != 0)
+    return false;
+  if (step == 0) {
+    uint16_t main_param = 0;
+    return validate_relay_frame_(frame, main_param, sequence) &&
+           main_param == iohc_cmd::MP_STOP;
+  }
+  if (frame.size() != 27 || frame[1] != 0x00 || frame[2] != 0x00 ||
+      frame[3] != 0x00 || frame[4] != 0x3F || frame[8] == 0)
+    return false;
+  const uint8_t *data = frame.data() + 9;
+  bool valid = false;
+  if (step == 1) {
+    valid = frame[8] == iohc_cmd::CMD_EXECUTE && data[0] == 0x01 &&
+            data[1] == 0x43 && data[2] == 0xD2 && data[3] == 0x00 &&
+            data[4] == 0x20 && data[5] == 0xD2 && data[6] == 0x00 &&
+            data[7] == 0x00;
+  } else if (step == 2 || step == 3) {
+    const bool released = step == 3;
+    valid = frame[8] == iohc_cmd::CMD_BUTTON_EVENT && data[0] == 0x02 &&
+            data[1] == 0xFF && data[2] == 0x01 && data[3] == 0x43 &&
+            data[4] == iohc_cmd::BUTTON_ACTION_STOP_MY &&
+            data[5] == (released ? 0x05 : 0x0C) &&
+            data[6] == (released ? 0xFF : 0x00) && data[7] == 0x00;
+  }
+  if (!valid)
+    return false;
+  sequence = (static_cast<uint16_t>(frame[17]) << 8U) | frame[18];
+  return sequence != 0;
 }
 
 void SomfyIohcManager::observe_service(int32_t slot, std::string command,
@@ -2990,8 +3135,16 @@ void SomfyIohcManager::on_relayable_frame_(
 
   uint16_t validated_param = 0;
   uint16_t sequence = 0;
-  if (!validate_relay_frame_(frame, validated_param, sequence) ||
-      validated_param != main_param) {
+  uint8_t my_step = 0xFF;
+  if (main_param == iohc_cmd::RELAY_MY_EXECUTE) my_step = 1;
+  else if (main_param == iohc_cmd::RELAY_MY_PRESS) my_step = 2;
+  else if (main_param == iohc_cmd::RELAY_MY_RELEASE) my_step = 3;
+  const bool valid =
+      my_step != 0xFF
+          ? this->validate_my_relay_frame_(frame, my_step, sequence)
+          : (validate_relay_frame_(frame, validated_param, sequence) &&
+             validated_param == main_param);
+  if (!valid) {
     this->publish_status_("error", slot, "primary_frame_not_relayable");
     return;
   }
@@ -3001,12 +3154,21 @@ void SomfyIohcManager::on_relayable_frame_(
     this->publish_status_("error", slot, "relay_envelope_encryption_failed");
     return;
   }
-  const char *command = main_param == iohc_cmd::MP_OPEN
+  const char *command = my_step != 0xFF ||
+                                (this->relay_source_my_active_ &&
+                                 main_param == iohc_cmd::MP_STOP)
+                            ? "my"
+                            : (main_param == iohc_cmd::MP_OPEN
                             ? "open"
                             : (main_param == iohc_cmd::MP_CLOSE ? "close"
-                                                                : "stop");
+                                                                : "stop"));
+  char detail[24] = "";
+  if (strcmp(command, "my") == 0) {
+    const uint8_t step = my_step == 0xFF ? 0 : my_step;
+    snprintf(detail, sizeof(detail), "step_%u", step);
+  }
   this->publish_relay_event_("relay_offer", slot, command,
-                             this->relay_capture_token_, envelope);
+                             this->relay_capture_token_, envelope, detail);
 }
 
 bool SomfyIohcManager::validate_relay_frame_(

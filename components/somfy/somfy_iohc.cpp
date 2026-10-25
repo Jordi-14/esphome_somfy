@@ -178,6 +178,31 @@ void SomfyIohcCover::runtime_stop() {
 
 void SomfyIohcCover::runtime_my() { this->my(); }
 
+bool SomfyIohcCover::runtime_redundant_my_step(uint8_t step) {
+  if (!this->runtime_enabled_ || this->mode_ != IohcMode::MODE_1W)
+    return false;
+  switch (step) {
+    case 0:
+      this->cancel_1w_my_sequence();
+      this->cancel_1w_tilt_sequence();
+      return this->send_1w_command(iohc_cmd::MP_STOP);
+    case 1:
+      return this->send_1w_my_execute();
+    case 2:
+      if (!this->send_1w_button_event(iohc_cmd::BUTTON_ACTION_STOP_MY, false))
+        return false;
+#ifdef USE_SOMFY_IOHC_RX
+      if (this->has_my_position_)
+        this->start_rx_sync_to(this->my_position_);
+#endif
+      return true;
+    case 3:
+      return this->send_1w_button_event(iohc_cmd::BUTTON_ACTION_STOP_MY, true);
+    default:
+      return false;
+  }
+}
+
 void SomfyIohcCover::runtime_set_position(float position) {
   auto call = this->make_call();
   call.set_position(clamp(position, 0.0f, 1.0f));
@@ -520,6 +545,12 @@ bool SomfyIohcCover::send_1w_button_event(uint8_t action, bool released) {
     return false;
   }
   this->hub_->transmit_packet(frame, static_cast<uint8_t>(this->repeat_count_));
+  if (this->relay_frame_callback_) {
+    const uint16_t relay_kind = released ? iohc_cmd::RELAY_MY_RELEASE
+                                         : iohc_cmd::RELAY_MY_PRESS;
+    this->relay_frame_callback_(relay_kind, frame,
+                                static_cast<uint8_t>(this->repeat_count_));
+  }
   return true;
 }
 
@@ -545,6 +576,9 @@ bool SomfyIohcCover::send_1w_my_execute() {
     return false;
   }
   this->hub_->transmit_packet(frame, static_cast<uint8_t>(this->repeat_count_));
+  if (this->relay_frame_callback_)
+    this->relay_frame_callback_(iohc_cmd::RELAY_MY_EXECUTE, frame,
+                                static_cast<uint8_t>(this->repeat_count_));
   return true;
 }
 

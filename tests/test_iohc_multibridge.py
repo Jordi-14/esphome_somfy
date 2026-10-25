@@ -77,7 +77,7 @@ def test_cluster_relay_key_is_sensitive_and_defaults_without_breaking_yaml():
     assert "RELAY_GCM_AAD" in MANAGER_CPP
 
 
-def test_redundant_control_accepts_only_open_close_and_stop():
+def test_redundant_control_accepts_ordinary_frames_and_strict_my_steps():
     function = _function(
         MANAGER_CPP,
         "void SomfyIohcManager::redundant_control_service",
@@ -85,14 +85,54 @@ def test_redundant_control_accepts_only_open_close_and_stop():
     )
     for command in ("open", "close", "stop"):
         assert f'command == "{command}"' in function
-    for forbidden in ("my", "position", "tilt", "program", "pair"):
+    for command in ("my", "my_1", "my_2", "my_3"):
+        assert f'command == "{command}"' in function
+    for forbidden in ("position", "tilt", "program", "pair"):
         assert f'command == "{forbidden}"' not in function
-    assert "relay_capture_active_" in function
-    assert "relay_capture_token_" in function
-    assert "runtime_my" not in function
-    assert "runtime_set_position" not in function
-    assert "runtime_set_tilt" not in function
-    assert "runtime_program" not in function
+
+
+def test_redundant_my_uses_four_encrypted_ordered_exact_frames():
+    service = _function(
+        MANAGER_CPP,
+        "void SomfyIohcManager::redundant_control_service",
+        "void SomfyIohcManager::send_redundant_my_step_",
+    )
+    sender = _function(
+        MANAGER_CPP,
+        "void SomfyIohcManager::send_redundant_my_step_",
+        "void SomfyIohcManager::relay_service",
+    )
+    relay = _function(
+        MANAGER_CPP,
+        "void SomfyIohcManager::relay_service",
+        "bool SomfyIohcManager::validate_my_relay_frame_",
+    )
+    validator = _function(
+        MANAGER_CPP,
+        "bool SomfyIohcManager::validate_my_relay_frame_",
+        "void SomfyIohcManager::observe_service",
+    )
+    assert 'command == "my_3"' in service
+    assert "MY_PRESTOP_SETTLE_MS" in service
+    assert "MY_EVENT_DELAY_MS" in service
+    assert "MY_RELEASE_DELAY_MS" in service
+    assert "runtime_redundant_my_step(step)" in sender
+    assert 'action == "arm_my"' in relay
+    assert 'action != "send_more"' in relay
+    assert '"relay_my_complete"' in relay
+    assert "frame.size() != 27" in validator
+    assert "BUTTON_ACTION_STOP_MY" in validator
+    for forbidden in ("nextCode", "seedNextCode", "storage_"):
+        assert forbidden not in relay + validator
+    assert "relay_capture_active_" in sender
+    assert "relay_capture_token_" in sender
+    for forbidden in (
+        "runtime_my()",
+        "runtime_set_position",
+        "runtime_set_tilt",
+        "runtime_program",
+    ):
+        assert forbidden not in service + sender
 
 
 def test_primary_offers_canonical_frame_only_after_local_transmit():

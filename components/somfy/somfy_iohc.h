@@ -102,6 +102,9 @@ static constexpr uint32_t MY_PRESTOP_SETTLE_MS = 500;
 // main loop.
 static constexpr uint32_t MY_EVENT_DELAY_MS = 220;
 static constexpr uint32_t MY_RELEASE_DELAY_MS = 25;
+static constexpr uint16_t RELAY_MY_EXECUTE = 0xE001;
+static constexpr uint16_t RELAY_MY_PRESS = 0xE002;
+static constexpr uint16_t RELAY_MY_RELEASE = 0xE003;
 
 // Originator IDs
 static constexpr uint8_t ORIGINATOR_USER = 0x01;
@@ -202,6 +205,7 @@ class SomfyIohcCover : public SomfyTimeBasedCover {
   void runtime_close();
   void runtime_stop();
   void runtime_my();
+  bool runtime_redundant_my_step(uint8_t step);
   void runtime_set_position(float position);
   void runtime_set_tilt(float tilt);
   void runtime_tilt_step(bool clockwise);
