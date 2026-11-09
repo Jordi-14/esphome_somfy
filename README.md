@@ -368,7 +368,9 @@ failure rules, and two-radio validation checklist.
 
 Install the companion
 [Somfy IO Shutter Manager](https://github.com/Jordi-14/homeassistant_somfy_io_manager)
-custom integration through HACS. It provides graphical pairing, import,
+custom integration through the Home Assistant Marketplace (HA 2026.11+) or
+HACS on older supported HA versions. Follow the companion repository's
+installation instructions. It provides graphical pairing, import,
 calibration, slot moves, occupied-slot swaps, encrypted recovery, per-shutter
 devices, native MY controls, physical-group assignment, and physical-remote
 diagnostics.
